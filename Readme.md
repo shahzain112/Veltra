@@ -1,5 +1,8 @@
 <div align="center">
 
+
+<div align="center">
+
 ---
 
 ## 📸 Screenshot
@@ -125,7 +128,7 @@ Whether it's a bug fix, a new feature, UI improvement, or documentation — ever
 
 ## 📄 License
 
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License — see the [LICENSE](./LICENSE) file for details.
 
 ```
 MIT License
