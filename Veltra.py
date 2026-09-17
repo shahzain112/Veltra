@@ -2,6 +2,7 @@ import os
 import sys
 import io
 import time
+import traceback
 import threading
 import subprocess
 import urllib.request
@@ -12,18 +13,38 @@ from tkinter import filedialog, messagebox
 from PIL import Image, ImageDraw, ImageTk
 
 # ================= CONSTANTS =================
-VERSION = "2.0.0"
+VERSION = "2.3.0"
 APP_NAME = "Veltra"
-FROZEN = getattr(sys, "frozen", False)   # exe ke andar chal raha hai?
+FROZEN = getattr(sys, "frozen", False)   # True when running inside the built EXE
+WIN_W, WIN_H = 880, 800                  # window size
 
-# ---------------- FFmpeg auto-detect ----------------
-try:
-    import imageio_ffmpeg
-    FFMPEG_PATH = os.path.dirname(imageio_ffmpeg.get_ffmpeg_exe())
-except Exception:
-    FFMPEG_PATH = None
+# ---------------- FFmpeg auto-setup (FIXED) ----------------
+def _setup_ffmpeg():
+    """imageio's binary is named 'ffmpeg-win-x86_64-vX.exe', but yt-dlp
+    looks for 'ffmpeg.exe' inside a folder. So we make a properly
+    named copy and hand yt-dlp that folder instead."""
+    try:
+        import imageio_ffmpeg
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+    try:
+        import shutil
+        import tempfile
+        bin_dir = os.path.join(tempfile.gettempdir(), "VeltraFFmpeg")
+        os.makedirs(bin_dir, exist_ok=True)
+        target = os.path.join(bin_dir, "ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+        # Copy on first run or when the version changes
+        if not os.path.exists(target) or os.path.getsize(target) != os.path.getsize(exe):
+            shutil.copy2(exe, target)
+        print(f"[Veltra] FFmpeg ready: {target}")
+        return bin_dir
+    except Exception:
+        return os.path.dirname(exe)
 
-# ---------------- Windows DPI (crisp UI) ----------------
+FFMPEG_PATH = _setup_ffmpeg()
+
+# ---------------- Windows DPI (crisp UI on high-res screens) ----------------
 if sys.platform == "win32":
     try:
         from ctypes import windll
@@ -53,7 +74,7 @@ def find_logo():
 
 
 def make_ico(png_path):
-    """PNG ko Windows .ico mein convert karo (title bar + exe icon ke liye)"""
+    """Convert PNG to a Windows .ico (title bar + exe icon)"""
     if not png_path:
         return None
     try:
@@ -73,11 +94,11 @@ LOGO_PNG = find_logo()
 ICON_ICO = make_ico(LOGO_PNG)
 
 # ================= THEME (Spotify-inspired) =================
-BG        = "#0A0A0C"
-CARD      = "#141417"
-ENTRY_BG  = "#1B1B20"
+BG        = "#0A0A0C"   # app background
+CARD      = "#141417"   # card surface
+ENTRY_BG  = "#1B1B20"   # inputs
 BORDER    = "#26262C"
-ACCENT    = "#1DB954"
+ACCENT    = "#1DB954"   # Spotify green
 ACCENT_HV = "#1ED760"
 TEXT      = "#F2F2F5"
 MUTED     = "#8B8B94"
@@ -89,6 +110,7 @@ ctk.set_appearance_mode("dark")
 
 
 class DownloadCancelled(Exception):
+    """Raised inside the yt-dlp hook to stop the download cleanly."""
     pass
 
 
@@ -127,7 +149,7 @@ class VeltraApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(f"{APP_NAME} v{VERSION}")
-        self.geometry("820x740")
+        self.geometry(f"{WIN_W}x{WIN_H}")
         self.resizable(False, False)
         self.configure(fg_color=BG)
 
@@ -137,10 +159,11 @@ class VeltraApp(ctk.CTk):
             except Exception:
                 pass
 
+        # Center the window on screen
         self.update_idletasks()
-        x = (self.winfo_screenwidth() - 820) // 2
-        y = (self.winfo_screenheight() - 740) // 2
-        self.geometry(f"820x740+{x}+{y}")
+        x = (self.winfo_screenwidth() - WIN_W) // 2
+        y = (self.winfo_screenheight() - WIN_H) // 2
+        self.geometry(f"{WIN_W}x{WIN_H}+{x}+{y}")
 
         self.last_folder = os.path.join(os.path.expanduser("~"), "Downloads")
         self._last_saved_folder = self.last_folder
@@ -149,12 +172,12 @@ class VeltraApp(ctk.CTk):
         self._thumb_img = None
         self._last_tick = 0
 
-        self._build_footer()
+        self._build_footer()          # pinned to bottom first
         self._build_header()
         self._build_url_card()
         self._build_preview_card()
         self._build_options_card()
-        self._build_download_button()
+        self._build_action_buttons()
         self._build_progress_card()
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -167,13 +190,13 @@ class VeltraApp(ctk.CTk):
             self,
             text=f"{APP_NAME} v{VERSION} ({mode_txt})  •  Engine: yt-dlp v{yt_dlp.version.__version__}"
                  f"  •  FFmpeg: {ffmpeg_txt}  •  1800+ sites supported",
-            font=(FONT, 11), text_color=MUTED).pack(side="bottom", pady=(0, 12))
+            font=(FONT, 11), text_color=MUTED).pack(side="bottom", pady=(0, 10))
 
     def _build_header(self):
         bar = ctk.CTkFrame(self, fg_color="transparent")
-        bar.pack(fill="x", padx=28, pady=(22, 4))
+        bar.pack(fill="x", padx=28, pady=(20, 4))
 
-        # ---- Logo (tumhari Veltra.png ya fallback) ----
+        # ---- Logo (user's Veltra.png or a fallback square) ----
         if LOGO_PNG:
             try:
                 img = rounded_img(Image.open(LOGO_PNG), (48, 48), 14)
@@ -192,14 +215,14 @@ class VeltraApp(ctk.CTk):
                      font=(FONT, 11), text_color=MUTED).pack(anchor="w")
 
         if not FROZEN:
-            # Dev mode mein hi EXE builder dikhega (exe ke andar iski zaroorat nahi)
+            # EXE builder is only visible in dev mode
             self.build_btn = ctk.CTkButton(bar, text="🔨  Create EXE", width=130, height=34,
                                            corner_radius=10, fg_color="#173B26",
                                            hover_color="#1E4F33", text_color=ACCENT,
                                            font=(FONT, 12, "bold"), command=self._build_exe)
             self.build_btn.pack(side="right", pady=(4, 0), padx=(10, 0))
 
-        self.update_btn = ctk.CTkButton(bar, text="⟳  Update Engine", width=138, height=34,
+        self.update_btn = ctk.CTkButton(bar, text="⟳  Update Engine", width=140, height=34,
                                         corner_radius=10, fg_color=ENTRY_BG, hover_color=BORDER,
                                         text_color=TEXT, font=(FONT, 12, "bold"),
                                         command=self._update_engine)
@@ -214,9 +237,9 @@ class VeltraApp(ctk.CTk):
 
     def _build_url_card(self):
         card = ctk.CTkFrame(self, fg_color=CARD, corner_radius=18)
-        card.pack(fill="x", padx=28, pady=(12, 0))
+        card.pack(fill="x", padx=28, pady=(10, 0))
         inner = ctk.CTkFrame(card, fg_color="transparent")
-        inner.pack(fill="x", padx=16, pady=16)
+        inner.pack(fill="x", padx=16, pady=14)
 
         ctk.CTkLabel(inner, text="VIDEO LINK", font=(FONT, 11, "bold"),
                      text_color=MUTED).pack(anchor="w")
@@ -241,17 +264,22 @@ class VeltraApp(ctk.CTk):
         self.fetch_btn.pack(side="left", padx=(8, 0))
 
     def _build_preview_card(self):
-        self.preview = ctk.CTkFrame(self, fg_color=CARD, corner_radius=18)
-        self.preview.pack(fill="x", padx=28, pady=14)
-        ctk.CTkLabel(self.preview,
-                     text="🔗  Link paste karo aur 'Fetch ⚡' dabao — video ki preview yahan dikhegi",
-                     font=(FONT, 13), text_color=MUTED).pack(pady=36)
+        # FIXED height: when the preview loads, the layout never shifts,
+        # so nothing below gets pushed out of the window.
+        self.preview = ctk.CTkFrame(self, fg_color=CARD, corner_radius=18, height=150)
+        self.preview.pack(fill="x", padx=28, pady=12)
+        self.preview.pack_propagate(False)
+        self.preview_placeholder = ctk.CTkLabel(
+            self.preview,
+            text="🔗  Paste a link and hit 'Fetch ⚡' — the video preview will appear here",
+            font=(FONT, 13), text_color=MUTED)
+        self.preview_placeholder.pack(expand=True)
 
     def _build_options_card(self):
         card = ctk.CTkFrame(self, fg_color=CARD, corner_radius=18)
         card.pack(fill="x", padx=28)
         inner = ctk.CTkFrame(card, fg_color="transparent")
-        inner.pack(fill="x", padx=16, pady=16)
+        inner.pack(fill="x", padx=16, pady=14)
 
         ctk.CTkLabel(inner, text="QUALITY", font=(FONT, 11, "bold"),
                      text_color=MUTED).pack(anchor="w")
@@ -265,23 +293,38 @@ class VeltraApp(ctk.CTk):
         self.quality_seg.set("Best")
         self.quality_seg.pack(fill="x", pady=(8, 6))
 
-        self.quality_hint = ctk.CTkLabel(inner, text="Best = sabse highest quality (video + audio merge)",
-                                         font=(FONT, 11), text_color=MUTED, anchor="w")
+        self.quality_hint = ctk.CTkLabel(
+            inner,
+            text="Best = maximum quality (H.264/AAC — plays on every player)",
+            font=(FONT, 11), text_color=MUTED, anchor="w")
         self.quality_hint.pack(anchor="w")
 
-    def _build_download_button(self):
+    def _build_action_buttons(self):
+        """Download and Cancel share the SAME slot — they swap places.
+        This way Cancel is always visible while downloading."""
+        self.action_holder = ctk.CTkFrame(self, fg_color="transparent")
+        self.action_holder.pack(fill="x", padx=28, pady=(14, 0))
+
+        # Download button (green)
         self.download_btn = ctk.CTkButton(
-            self, text="⬇    D O W N L O A D    N O W",
+            self.action_holder, text="⬇    D O W N L O A D    N O W",
             height=54, corner_radius=27, font=(FONT, 16, "bold"),
             fg_color=ACCENT, hover_color=ACCENT_HV, text_color="#062B12",
             command=self._start_download)
-        self.download_btn.pack(fill="x", padx=28, pady=(18, 0))
+        self.download_btn.pack(fill="x")
+
+        # Cancel button (red) — same size, same slot, currently hidden
+        self.cancel_btn = ctk.CTkButton(
+            self.action_holder, text="✕    C A N C E L    D O W N L O A D",
+            height=54, corner_radius=27, font=(FONT, 16, "bold"),
+            fg_color="#2A1518", hover_color="#3B1D22", text_color=DANGER,
+            command=self._cancel)
 
     def _build_progress_card(self):
         card = ctk.CTkFrame(self, fg_color=CARD, corner_radius=18)
-        card.pack(fill="x", padx=28, pady=(18, 0))
+        card.pack(fill="x", padx=28, pady=(14, 0))
         inner = ctk.CTkFrame(card, fg_color="transparent")
-        inner.pack(fill="x", padx=18, pady=16)
+        inner.pack(fill="x", padx=18, pady=14)
 
         top = ctk.CTkFrame(inner, fg_color="transparent")
         top.pack(fill="x")
@@ -300,22 +343,15 @@ class VeltraApp(ctk.CTk):
         self.progress = ctk.CTkProgressBar(inner, progress_color=ACCENT, fg_color=ENTRY_BG,
                                            height=12, corner_radius=6)
         self.progress.set(0)
-        self.progress.pack(fill="x", pady=(12, 12))
+        self.progress.pack(fill="x", pady=(10, 10))
 
         bottom = ctk.CTkFrame(inner, fg_color="transparent")
         bottom.pack(fill="x")
         bottom.grid_columnconfigure(0, weight=1)
 
-        self.status_label = ctk.CTkLabel(bottom, text="Ready — link paste karo",
+        self.status_label = ctk.CTkLabel(bottom, text="Ready — paste a link to start",
                                          font=(FONT, 12), text_color=MUTED, anchor="w")
         self.status_label.grid(row=0, column=0, sticky="w")
-
-        self.cancel_btn = ctk.CTkButton(bottom, text="✕  Cancel", width=96, height=32,
-                                        corner_radius=9, fg_color="#2A1518", hover_color="#3B1D22",
-                                        text_color=DANGER, font=(FONT, 12, "bold"),
-                                        command=self._cancel)
-        self.cancel_btn.grid(row=0, column=1, sticky="e", padx=(10, 0))
-        self.cancel_btn.grid_remove()
 
         self.open_btn = ctk.CTkButton(bottom, text="📂  Open Folder", width=132, height=32,
                                       corner_radius=9, fg_color=ENTRY_BG, hover_color=BORDER,
@@ -337,18 +373,18 @@ class VeltraApp(ctk.CTk):
 
     def _quality_changed(self, value):
         hints = {
-            "Best": "Best = sabse highest quality (video + audio merge)",
-            "MP3": "MP3 = sirf awaz niklegi (music, podcast, lecture)",
+            "Best": "Best = maximum quality (H.264/AAC — plays on every player)",
+            "MP3": "MP3 = audio only (music, podcasts, lectures)",
         }
         self.quality_hint.configure(
-            text=hints.get(value, f"{value} pe locked rahegi quality"))
+            text=hints.get(value, f"Quality will be capped at {value} (H.264 preferred)"))
 
     def _fetch_info(self):
         url = self.url_entry.get().strip()
         if not url or self.busy:
             return
         self.fetch_btn.configure(state="disabled", text="...")
-        self._status("🔍 Video ki info nikal rahe hain...", MUTED)
+        self._status("🔍 Fetching video info...", MUTED)
 
         def work():
             try:
@@ -359,7 +395,7 @@ class VeltraApp(ctk.CTk):
                 with yt_dlp.YoutubeDL(opts) as ydl:
                     info = ydl.extract_info(url, download=False)
                 self.after(0, lambda: self._show_preview(info))
-                self._status("✅ Preview loaded — quality chuno aur DOWNLOAD dabao", ACCENT)
+                self._status("✅ Preview loaded — pick a quality and hit DOWNLOAD", ACCENT)
             except Exception as e:
                 self._status("❌ " + str(e).splitlines()[0][:80], DANGER)
             finally:
@@ -368,10 +404,13 @@ class VeltraApp(ctk.CTk):
         threading.Thread(target=work, daemon=True).start()
 
     def _show_preview(self, info):
+        self.preview_placeholder.pack_forget()
         for w in self.preview.winfo_children():
-            w.destroy()
+            if w is not self.preview_placeholder:
+                w.destroy()
+
         row = ctk.CTkFrame(self.preview, fg_color="transparent")
-        row.pack(fill="x", padx=16, pady=14)
+        row.pack(fill="both", expand=True, padx=16, pady=12)
 
         self._load_thumb(info.get("thumbnail"), row)
 
@@ -382,7 +421,7 @@ class VeltraApp(ctk.CTk):
         if len(title) > 72:
             title = title[:69] + "..."
         ctk.CTkLabel(box, text=title, font=(FONT, 15, "bold"), text_color=TEXT,
-                     wraplength=440, justify="left", anchor="w").pack(anchor="w")
+                     wraplength=500, justify="left", anchor="w").pack(anchor="w")
 
         dur = info.get("duration_string")
         if not dur and info.get("duration"):
@@ -433,7 +472,7 @@ class VeltraApp(ctk.CTk):
                         pass
                 self.after(0, apply)
             except Exception:
-                pass
+                pass  # keep the placeholder if the thumbnail fails
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -443,11 +482,11 @@ class VeltraApp(ctk.CTk):
             return
         url = self.url_entry.get().strip()
         if not url:
-            messagebox.showwarning("Link Missing", "Pehle video ka link paste karo!")
+            messagebox.showwarning("Link Missing", "Paste a video link first!")
             return
 
-        # Directory popup download karte waqt
-        folder = filedialog.askdirectory(title=f"📁 {APP_NAME} — Video kahan save karna hai?",
+        # Ask where to save (every download)
+        folder = filedialog.askdirectory(title=f"📁 {APP_NAME} — Choose where to save the video",
                                          initialdir=self.last_folder)
         if not folder:
             return
@@ -456,10 +495,13 @@ class VeltraApp(ctk.CTk):
 
         self.busy = True
         self.cancel_event.clear()
-        self.download_btn.configure(state="disabled", text="D O W N L O A D I N G ...")
+
+        # 🔥 SWAP: green DOWNLOAD disappears, red CANCEL takes its exact place
+        self.download_btn.pack_forget()
+        self.cancel_btn.pack(fill="x")
         self.fetch_btn.configure(state="disabled")
         self.open_btn.grid_remove()
-        self.cancel_btn.grid()
+
         self.progress.set(0)
         self.lbl_percent.configure(text="0 %", text_color=ACCENT)
         self._status("🚀 Connecting...", MUTED)
@@ -470,13 +512,23 @@ class VeltraApp(ctk.CTk):
 
     def _run_download(self, url, folder, quality):
         try:
+            # 🎯 UNIVERSAL COMPATIBILITY:
+            # H.264 (avc1) video + AAC (mp4a) audio is the worldwide standard.
+            # It plays on EVERY media player: VLC, Windows Media Player,
+            # smart TVs, mobiles, car systems, everything.
+            # Fallback chain (separated by /) ensures the download never fails:
+            #   1st choice: H.264 + AAC
+            #   2nd choice: any video + any audio
+            #   3rd choice: single best combined file
             if quality == "MP3":
                 fmt = "bestaudio/best"
             elif quality == "Best":
-                fmt = "bestvideo+bestaudio/best"
+                fmt = ("bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
+                       "bestvideo+bestaudio/best")
             else:
                 h = quality.replace("p", "")
-                fmt = f"bestvideo[height<={h}]+bestaudio/best[height<={h}]"
+                fmt = (f"bestvideo[vcodec^=avc1][height<={h}]+bestaudio[acodec^=mp4a]/"
+                       f"bestvideo[height<={h}]+bestaudio/best[height<={h}]")
 
             opts = {
                 "format": fmt,
@@ -486,8 +538,9 @@ class VeltraApp(ctk.CTk):
                 "noplaylist": True,
                 "quiet": True,
                 "no_warnings": True,
-                "concurrent_fragment_downloads": 8,   # 4-5x speed (quality same rehti hai)
+                "concurrent_fragment_downloads": 8,   # 4-5x speed (quality is unaffected)
                 "retries": 10,
+                "continuedl": True,                    # resume partial downloads
                 "windowsfilenames": True,
             }
             if FFMPEG_PATH:
@@ -513,12 +566,16 @@ class VeltraApp(ctk.CTk):
             self.after(0, done)
 
         except DownloadCancelled:
-            self._status("⏹ Download cancel ho gaya", WARNING)
+            self._status("⏹ Download cancelled", WARNING)
             self.after(0, lambda: self.progress.set(0))
             self.after(0, lambda: self.lbl_percent.configure(text="0 %"))
         except Exception as e:
+            traceback.print_exc()   # full error in the terminal
             msg = str(e).splitlines()[0] if str(e) else "Unknown error"
             self._status("❌ " + msg[:90], DANGER)
+            # 🔥 ERROR POPUP — failures are never silent!
+            self.after(0, lambda m=msg: messagebox.showerror(
+                f"{APP_NAME} — Download Failed", m))
         finally:
             self.after(0, self._reset_ui)
 
@@ -530,7 +587,7 @@ class VeltraApp(ctk.CTk):
             def merging():
                 self.progress.set(1.0)
                 self.lbl_percent.configure(text="100 %")
-                self._status("🔧 Merging (ffmpeg)... thora sabar", MUTED)
+                self._status("🔧 Merging (ffmpeg)... please wait", MUTED)
             self.after(0, merging)
             return
 
@@ -538,7 +595,7 @@ class VeltraApp(ctk.CTk):
             return
 
         now = time.time()
-        if now - self._last_tick < 0.12:
+        if now - self._last_tick < 0.12:   # UI flood control
             return
         self._last_tick = now
 
@@ -565,7 +622,7 @@ class VeltraApp(ctk.CTk):
             self.lbl_eta.configure(text=f"ETA: {human_eta(eta)}")
         self.after(0, up)
 
-    # ================= BUILD EXE (andar hi builder!) =================
+    # ================= BUILD EXE (built-in builder!) =================
     def _build_exe(self):
         if self.busy:
             return
@@ -574,8 +631,8 @@ class VeltraApp(ctk.CTk):
         if not png:
             ok = messagebox.askyesno(
                 "Icon Missing",
-                "Isi folder mein 'Veltra.png' nahi mili.\n\n"
-                "Icon ke bina EXE banau? (default icon lagega)")
+                "'Veltra.png' was not found in this folder.\n\n"
+                "Build the EXE without an icon? (default icon will be used)")
             if not ok:
                 return
 
@@ -584,7 +641,7 @@ class VeltraApp(ctk.CTk):
         self.fetch_btn.configure(state="disabled")
         if hasattr(self, "build_btn"):
             self.build_btn.configure(state="disabled", text="Building...")
-        self._status("🔨 EXE build ho rahi hai — window band mat karna!", WARNING)
+        self._status("🔨 Building EXE — do not close the window!", WARNING)
         threading.Thread(target=self._build_work, args=(ico, png), daemon=True).start()
 
     def _build_work(self, ico, png):
@@ -593,14 +650,14 @@ class VeltraApp(ctk.CTk):
             sep = ";" if os.name == "nt" else ":"
             script = os.path.abspath(__file__)
 
-            self._status("⚙ Step 1/2: PyInstaller ready ho raha hai...", MUTED)
+            self._status("⚙ Step 1/2: Preparing PyInstaller...", MUTED)
             r = subprocess.run([sys.executable, "-m", "pip", "install", "-U", "pyinstaller"],
                                capture_output=True, text=True, timeout=600, creationflags=cf)
             if r.returncode != 0:
-                self._status("❌ PyInstaller install fail: " + (r.stderr or "")[:70], DANGER)
+                self._status("❌ PyInstaller install failed: " + (r.stderr or "")[:70], DANGER)
                 return
 
-            self._status("🔨 Step 2/2: EXE ban rahi hai (3-6 minute)...", MUTED)
+            self._status("🔨 Step 2/2: Building EXE (3-6 minutes)...", MUTED)
             cmd = [sys.executable, "-m", "PyInstaller",
                    "--noconfirm", "--clean", "--onefile", "--noconsole",
                    "--name", APP_NAME]
@@ -622,24 +679,24 @@ class VeltraApp(ctk.CTk):
                 self._open_path(os.path.join(base_dir(), "dist"))
             else:
                 err = (r.stderr or r.stdout or "unknown error").strip().splitlines()
-                self._status("❌ Build fail: " + (err[-1] if err else "?")[:80], DANGER)
+                self._status("❌ Build failed: " + (err[-1] if err else "?")[:80], DANGER)
         except Exception as e:
             self._status("❌ " + str(e)[:80], DANGER)
         finally:
             self.after(0, self._reset_ui)
 
-    # ================= UPDATE ENGINE =================
+    # ================= UPDATE ENGINE (pip install -U yt-dlp) =================
     def _update_engine(self):
         if self.busy:
             return
         if FROZEN:
             messagebox.showinfo(
                 f"{APP_NAME} — Update",
-                "Ye portable build hai.\n\n"
-                "YouTube naya system laaye to developer se updated EXE leni hogi, "
-                "ya Veltra.py + Create EXE se nayi build banwani hogi.")
+                "This is a portable build.\n\n"
+                "When YouTube changes its system, get an updated EXE from the developer, "
+                "or rebuild using Veltra.py + the Create EXE button.")
             return
-        self._status("⟳ yt-dlp engine update ho raha hai... (1-2 min)", MUTED)
+        self._status("⟳ Updating yt-dlp engine... (pip install -U yt-dlp)", MUTED)
 
         def work():
             try:
@@ -647,9 +704,9 @@ class VeltraApp(ctk.CTk):
                 r = subprocess.run([sys.executable, "-m", "pip", "install", "-U", "yt-dlp"],
                                    capture_output=True, text=True, timeout=300, creationflags=cf)
                 if r.returncode == 0:
-                    self._status("✅ Engine updated! App restart karo", ACCENT)
+                    self._status("✅ Engine updated! Restart the app to load it", ACCENT)
                 else:
-                    self._status("⚠️ Update fail: " + (r.stderr or "unknown")[:70], WARNING)
+                    self._status("⚠️ Update failed: " + (r.stderr or "unknown")[:70], WARNING)
             except Exception as e:
                 self._status("⚠️ " + str(e)[:70], WARNING)
 
@@ -657,7 +714,10 @@ class VeltraApp(ctk.CTk):
 
     # ================= MISC =================
     def _cancel(self):
+        if self.cancel_event.is_set():
+            return
         self.cancel_event.set()
+        self.cancel_btn.configure(state="disabled", text="Cancelling...")
         self._status("⏹ Cancelling...", WARNING)
 
     def _open_path(self, path):
@@ -672,13 +732,17 @@ class VeltraApp(ctk.CTk):
             pass
 
     def _reset_ui(self):
+        """Called after EVERY download (complete / cancelled / failed).
+        Restores the UI to its idle state."""
         self.busy = False
         self.cancel_event.clear()
+        # 🔥 SWAP BACK: red CANCEL disappears, green DOWNLOAD returns
+        self.cancel_btn.pack_forget()
+        self.download_btn.pack(fill="x")
         self.download_btn.configure(state="normal", text="⬇    D O W N L O A D    N O W")
         self.fetch_btn.configure(state="normal", text="Fetch ⚡")
-        self.cancel_btn.grid_remove()
-        if hasattr(self, "build_btn"):
-            self.build_btn.configure(state="normal", text="🔨  Create EXE")
+        self.cancel_btn.configure(state="normal", text="✕    C A N C E L    D O W N L O A D")
+        self.open_btn.grid_remove()
 
     def _status(self, text, color=MUTED):
         self.after(0, lambda: self.status_label.configure(text=text, text_color=color))
