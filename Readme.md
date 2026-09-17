@@ -208,7 +208,7 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 </p>
 
 <p align="center">
-Made by <a href="https://github.com/shahzain112">Shahzain Ahmed</a>
+Made with 💚 by <a href="https://github.com/shahzain112">Shahzain Ahmed</a>
 </p>
 
 <p align="center">
