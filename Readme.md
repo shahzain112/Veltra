@@ -1,6 +1,3 @@
-<div align="center">
-
-
 <p align="center">
 <img src="VeltraBanner.jpg" alt="Veltra Banner" width="100%">
 </p>
@@ -27,6 +24,8 @@
 <a href="#-license">License</a>
 </p>
 
+> 📌 **Versions:** `Veltra.py` = original edition (pure downloader) • `Veltra_v2.1.1.py` = latest edition (adds Download History, English Subtitles & Clipboard Detection)
+
 ---
 
 ## 📸 Screenshot
@@ -41,19 +40,23 @@
 
 ## ✨ Features
 
-| Feature                            | Description                                                                        |
-| ---------------------------------- | ---------------------------------------------------------------------------------- |
-| 🎯**1800+ Supported Sites**  | YouTube, Dailymotion, Facebook, TikTok, Instagram, Twitter/X, Vimeo, Reddit & more |
-| 🖼**Live Video Preview**     | Paste a link and instantly see thumbnail, title, channel & views                   |
-| 🏆**Highest Quality Engine** | Up to 4K (2160p) with automatic video + audio merging                              |
-| 🎵**MP3 Extraction**         | Convert any video to audio with one click                                          |
-| 🚀**8x Parallel Downloads**  | 4-5x faster fragmented downloading                                                 |
-| 📊**Real-Time Progress**     | Live speed, ETA, size & percentage                                                 |
-| 📁**Directory Picker**       | Choose save location on every download                                             |
-| 🌓**Premium Dark UI**        | Spotify-inspired interface built with CustomTkinter                                |
-| 🔄**Self-Updating Engine**   | One-click yt-dlp engine update from inside the app                                 |
-| 📦**Portable EXE**           | Single`.exe` file, no Python installation required                               |
-| ❌**Cancel Anytime**         | Stop downloads mid-way with one click                                              |
+| Feature                            | Description                                                                                          |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| 🎯**1800+ Supported Sites**  | YouTube, Dailymotion, Facebook, TikTok, Instagram, Twitter/X, Vimeo, Reddit & more                   |
+| 🖼**Live Video Preview**     | Paste a link and instantly see thumbnail, title, channel & views                                     |
+| 🏆**Highest Quality Engine** | Up to 4K (2160p) with automatic video + audio merging                                                |
+| 🎵**MP3 Extraction**         | Convert any video to audio with one click                                                            |
+| 🚀**8x Parallel Downloads**  | 4-5x faster fragmented downloading                                                                   |
+| 📊**Real-Time Progress**     | Live speed, ETA, size & percentage                                                                   |
+| 📁**Directory Picker**       | Choose save location on every download                                                               |
+| 🌓**Premium Dark UI**        | Spotify-inspired interface built with CustomTkinter                                                  |
+| 🔄**Self-Updating Engine**   | One-click yt-dlp engine update from inside the app                                                   |
+| 📦**Portable EXE**           | Single`.exe` file, no Python installation required                                                 |
+| 🎬**English Subtitles (CC)** | Auto-download & auto-translate subtitles to English (.srt) for any video — like YouTube's CC button |
+| 🕘**Download History**       | Every download remembered — replay or open the folder in one click                                  |
+| 📋**Clipboard Detection**    | Copy a link anywhere — Veltra detects and fetches it instantly                                      |
+| ⚡**Instant Cancel**         | Downloads stop immediately on cancel — zero freezing                                                |
+| ❌**Cancel Anytime**         | Stop downloads mid-way with one click                                                                |
 
 ---
 
@@ -104,10 +107,12 @@ python Veltra.py
 
 ## 🚀 Usage
 
-1. **Paste** any video link *(or click the 📋 button to auto-paste from clipboard)*
+1. **Copy** any video link — Veltra auto-detects it from the clipboard! *(or paste manually)*
 2. Click **Fetch ⚡** — see the live preview
 3. **Select quality** — Best / 2160p / 1080p / 720p / 480p / MP3
-4. Hit **DOWNLOAD** — choose your folder and enjoy!
+4. Toggle **CC English Subtitles** — a translated `.srt` file saves next to your video
+5. Hit **DOWNLOAD** — choose your folder and enjoy!
+6. Revisit anything from the **🕘 History** page — one-click open
 
 > **Paste → Fetch → Download. That's it.** ⚡
 
@@ -135,18 +140,16 @@ pyinstaller --noconfirm --clean --onefile --noconsole --name Veltra --icon Veltr
 
 ```javascript
 Veltra/
-├── dist/
-│   └── Veltra.exe          # Ready-to-use portable executable
 ├── screenshots/
 │   └── app.png             # App screenshot for README
 ├── .gitignore
 ├── LICENSE                 # MIT License
 ├── README.md               # This file
 ├── requirements.txt        # Python dependencies
-├── Veltra.py               # Main application source
+├── Veltra.py               # Original edition — pure downloader
+├── Veltra_v2.1.1.py        # Latest edition — adds History, Subtitles & Clipboard detection
 ├── Veltra_icon.ico         # App icon
-├── Veltra.jpg              # Legacy image
-├── Veltra.spec             # PyInstaller spec file
+├── Veltra.jpg              # App icon (square image)
 └── VeltraBanner.jpg        # README banner image
 ```
 
@@ -182,12 +185,11 @@ git push origin feature/AmazingFeature
 ### Ideas You Can Work On
 
 - [ ] Playlist / batch downloads
-- [ ] Download history panel
-- [ ] Clipboard auto-detection
 - [ ] Light theme
 - [ ] Multi-language support (Urdu, Arabic...)
-- [ ] Subtitles downloading
 - [ ] Built-in update checker for releases
+- [ ] Built-in media player
+- [ ] AI auto-subtitle generation (speech-to-text for any video file)
 
 ---
 
@@ -208,7 +210,7 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 </p>
 
 <p align="center">
-Made with 💚 by <a href="https://github.com/shahzain112">Shahzain Ahmed</a>
+Made with by <a href="https://github.com/shahzain112">Shahzain Ahmed</a>
 </p>
 
 <p align="center">

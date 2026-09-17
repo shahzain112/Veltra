@@ -1,5 +1,6 @@
 venv/
 build/
 dist/
+veltra_history.json/
 __pycache__/
 *.spec
