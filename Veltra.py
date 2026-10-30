@@ -13,10 +13,17 @@ from tkinter import filedialog, messagebox
 from PIL import Image, ImageDraw, ImageTk
 
 # ================= CONSTANTS =================
-VERSION = "2.3.0"
+VERSION = "2.4.0"
 APP_NAME = "Veltra"
-FROZEN = getattr(sys, "frozen", False)   # True when running inside the built EXE
-WIN_W, WIN_H = 880, 800                  # window size
+FROZEN = getattr(sys, "frozen", False)  # True when running inside the built EXE
+WIN_W, WIN_H = 880, 900  # window size (taller: new Cookies row)
+
+# Browsers tried automatically when Cookies = Auto.
+# Firefox first: Chrome/Edge encrypt their cookies on Windows
+# (App-Bound Encryption) and yt-dlp usually cannot read them.
+AUTO_BROWSERS = ("firefox", "brave", "edge", "chrome", "opera", "vivaldi")
+COOKIE_SEG_VALUES = ["Auto", "Firefox", "Chrome", "Edge", "Brave", "Off"]
+
 
 # ---------------- FFmpeg auto-setup (FIXED) ----------------
 def _setup_ffmpeg():
@@ -25,22 +32,27 @@ def _setup_ffmpeg():
     named copy and hand yt-dlp that folder instead."""
     try:
         import imageio_ffmpeg
+
         exe = imageio_ffmpeg.get_ffmpeg_exe()
     except Exception:
         return None
     try:
         import shutil
         import tempfile
+
         bin_dir = os.path.join(tempfile.gettempdir(), "VeltraFFmpeg")
         os.makedirs(bin_dir, exist_ok=True)
         target = os.path.join(bin_dir, "ffmpeg.exe" if os.name == "nt" else "ffmpeg")
         # Copy on first run or when the version changes
-        if not os.path.exists(target) or os.path.getsize(target) != os.path.getsize(exe):
+        if not os.path.exists(target) or os.path.getsize(target) != os.path.getsize(
+            exe
+        ):
             shutil.copy2(exe, target)
         print(f"[Veltra] FFmpeg ready: {target}")
         return bin_dir
     except Exception:
         return os.path.dirname(exe)
+
 
 FFMPEG_PATH = _setup_ffmpeg()
 
@@ -48,11 +60,13 @@ FFMPEG_PATH = _setup_ffmpeg()
 if sys.platform == "win32":
     try:
         from ctypes import windll
+
         windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
         pass
 
 RESAMPLE = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+
 
 # ================= PATH HELPERS =================
 def resource_path(rel):
@@ -62,7 +76,11 @@ def resource_path(rel):
 
 
 def base_dir():
-    return os.path.dirname(sys.executable) if FROZEN else os.path.dirname(os.path.abspath(__file__))
+    return (
+        os.path.dirname(sys.executable)
+        if FROZEN
+        else os.path.dirname(os.path.abspath(__file__))
+    )
 
 
 def find_logo():
@@ -84,7 +102,9 @@ def make_ico(png_path):
         img = img.crop(((w - s) // 2, (h - s) // 2, (w - s) // 2 + s, (h - s) // 2 + s))
         img = img.resize((256, 256), RESAMPLE)
         ico = os.path.join(base_dir(), "Veltra_icon.ico")
-        img.save(ico, sizes=[(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)])
+        img.save(
+            ico, sizes=[(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)]
+        )
         return ico
     except Exception:
         return None
@@ -94,23 +114,24 @@ LOGO_PNG = find_logo()
 ICON_ICO = make_ico(LOGO_PNG)
 
 # ================= THEME (Spotify-inspired) =================
-BG        = "#0A0A0C"   # app background
-CARD      = "#141417"   # card surface
-ENTRY_BG  = "#1B1B20"   # inputs
-BORDER    = "#26262C"
-ACCENT    = "#1DB954"   # Spotify green
+BG = "#0A0A0C"  # app background
+CARD = "#141417"  # card surface
+ENTRY_BG = "#1B1B20"  # inputs
+BORDER = "#26262C"
+ACCENT = "#1DB954"  # Spotify green
 ACCENT_HV = "#1ED760"
-TEXT      = "#F2F2F5"
-MUTED     = "#8B8B94"
-DANGER    = "#FF5F57"
-WARNING   = "#FEBC2E"
-FONT      = "Segoe UI"
+TEXT = "#F2F2F5"
+MUTED = "#8B8B94"
+DANGER = "#FF5F57"
+WARNING = "#FEBC2E"
+FONT = "Segoe UI"
 
 ctk.set_appearance_mode("dark")
 
 
 class DownloadCancelled(Exception):
     """Raised inside the yt-dlp hook to stop the download cleanly."""
+
     pass
 
 
@@ -139,9 +160,36 @@ def human_eta(s):
 def rounded_img(img, size, radius):
     img = img.convert("RGBA").resize(size, RESAMPLE)
     mask = Image.new("L", size, 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0, 0, size[0] - 1, size[1] - 1], radius=radius, fill=255)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        [0, 0, size[0] - 1, size[1] - 1], radius=radius, fill=255
+    )
     img.putalpha(mask)
     return img
+
+
+def is_bot_check(err):
+    """True when YouTube demands a sign-in:
+    'Sign in to confirm you're not a bot'."""
+    t = str(err).lower()
+    return "sign in to confirm" in t or ("confirm" in t and "bot" in t)
+
+
+def is_cookie_error(err):
+    """True when a browser's cookies could not be read/decrypted."""
+    t = str(err).lower()
+    if is_bot_check(t):  # the bot-check text mentions 'cookies' too
+        return False
+    keys = (
+        "cookie",
+        "dpapi",
+        "decrypt",
+        "app-bound",
+        "appbound",
+        "keyring",
+        "could not find",
+        "database is locked",
+    )
+    return any(k in t for k in keys)
 
 
 # ================= MAIN APP =================
@@ -159,11 +207,12 @@ class VeltraApp(ctk.CTk):
             except Exception:
                 pass
 
-        # Center the window on screen
+        # Center the window on screen (never taller than the screen)
         self.update_idletasks()
+        h = min(WIN_H, self.winfo_screenheight() - 80)
         x = (self.winfo_screenwidth() - WIN_W) // 2
-        y = (self.winfo_screenheight() - WIN_H) // 2
-        self.geometry(f"{WIN_W}x{WIN_H}+{x}+{y}")
+        y = max(0, (self.winfo_screenheight() - h) // 2)
+        self.geometry(f"{WIN_W}x{h}+{x}+{y}")
 
         self.last_folder = os.path.join(os.path.expanduser("~"), "Downloads")
         self._last_saved_folder = self.last_folder
@@ -171,8 +220,12 @@ class VeltraApp(ctk.CTk):
         self.busy = False
         self._thumb_img = None
         self._last_tick = 0
+        self._bot_help_shown = False
+        self._cookie_ok_source = (
+            None  # cookie source that worked (used first next time)
+        )
 
-        self._build_footer()          # pinned to bottom first
+        self._build_footer()  # pinned to bottom first
         self._build_header()
         self._build_url_card()
         self._build_preview_card()
@@ -189,8 +242,10 @@ class VeltraApp(ctk.CTk):
         ctk.CTkLabel(
             self,
             text=f"{APP_NAME} v{VERSION} ({mode_txt})  •  Engine: yt-dlp v{yt_dlp.version.__version__}"
-                 f"  •  FFmpeg: {ffmpeg_txt}  •  1800+ sites supported",
-            font=(FONT, 11), text_color=MUTED).pack(side="bottom", pady=(0, 10))
+            f"  •  FFmpeg: {ffmpeg_txt}  •  1800+ sites supported",
+            font=(FONT, 11),
+            text_color=MUTED,
+        ).pack(side="bottom", pady=(0, 10))
 
     def _build_header(self):
         bar = ctk.CTkFrame(self, fg_color="transparent")
@@ -200,7 +255,9 @@ class VeltraApp(ctk.CTk):
         if LOGO_PNG:
             try:
                 img = rounded_img(Image.open(LOGO_PNG), (48, 48), 14)
-                self._logo_img = ctk.CTkImage(light_image=img, dark_image=img, size=(48, 48))
+                self._logo_img = ctk.CTkImage(
+                    light_image=img, dark_image=img, size=(48, 48)
+                )
                 ctk.CTkLabel(bar, image=self._logo_img, text="").pack(side="left")
             except Exception:
                 self._fallback_logo(bar)
@@ -209,31 +266,53 @@ class VeltraApp(ctk.CTk):
 
         title_box = ctk.CTkFrame(bar, fg_color="transparent")
         title_box.pack(side="left", padx=13)
-        ctk.CTkLabel(title_box, text=APP_NAME,
-                     font=(FONT, 24, "bold"), text_color=TEXT).pack(anchor="w")
-        ctk.CTkLabel(title_box, text="Grab Anything. In Max Quality.",
-                     font=(FONT, 11), text_color=MUTED).pack(anchor="w")
+        ctk.CTkLabel(
+            title_box, text=APP_NAME, font=(FONT, 24, "bold"), text_color=TEXT
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            title_box,
+            text="Grab Anything. In Max Quality.",
+            font=(FONT, 11),
+            text_color=MUTED,
+        ).pack(anchor="w")
 
         if not FROZEN:
             # EXE builder is only visible in dev mode
-            self.build_btn = ctk.CTkButton(bar, text="🔨  Create EXE", width=130, height=34,
-                                           corner_radius=10, fg_color="#173B26",
-                                           hover_color="#1E4F33", text_color=ACCENT,
-                                           font=(FONT, 12, "bold"), command=self._build_exe)
+            self.build_btn = ctk.CTkButton(
+                bar,
+                text="🔨  Create EXE",
+                width=130,
+                height=34,
+                corner_radius=10,
+                fg_color="#173B26",
+                hover_color="#1E4F33",
+                text_color=ACCENT,
+                font=(FONT, 12, "bold"),
+                command=self._build_exe,
+            )
             self.build_btn.pack(side="right", pady=(4, 0), padx=(10, 0))
 
-        self.update_btn = ctk.CTkButton(bar, text="⟳  Update Engine", width=140, height=34,
-                                        corner_radius=10, fg_color=ENTRY_BG, hover_color=BORDER,
-                                        text_color=TEXT, font=(FONT, 12, "bold"),
-                                        command=self._update_engine)
+        self.update_btn = ctk.CTkButton(
+            bar,
+            text="⟳  Update Engine",
+            width=140,
+            height=34,
+            corner_radius=10,
+            fg_color=ENTRY_BG,
+            hover_color=BORDER,
+            text_color=TEXT,
+            font=(FONT, 12, "bold"),
+            command=self._update_engine,
+        )
         self.update_btn.pack(side="right", pady=(4, 0))
 
     def _fallback_logo(self, bar):
         logo = ctk.CTkFrame(bar, width=48, height=48, corner_radius=14, fg_color=ACCENT)
         logo.pack(side="left")
         logo.pack_propagate(False)
-        ctk.CTkLabel(logo, text="▼", font=(FONT, 20, "bold"),
-                     text_color="#062B12").pack(expand=True)
+        ctk.CTkLabel(
+            logo, text="▼", font=(FONT, 20, "bold"), text_color="#062B12"
+        ).pack(expand=True)
 
     def _build_url_card(self):
         card = ctk.CTkFrame(self, fg_color=CARD, corner_radius=18)
@@ -241,26 +320,50 @@ class VeltraApp(ctk.CTk):
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.pack(fill="x", padx=16, pady=14)
 
-        ctk.CTkLabel(inner, text="VIDEO LINK", font=(FONT, 11, "bold"),
-                     text_color=MUTED).pack(anchor="w")
+        ctk.CTkLabel(
+            inner, text="VIDEO LINK", font=(FONT, 11, "bold"), text_color=MUTED
+        ).pack(anchor="w")
 
         row = ctk.CTkFrame(inner, fg_color="transparent")
         row.pack(fill="x", pady=(8, 0))
 
         self.url_entry = ctk.CTkEntry(
-            row, placeholder_text="https://...  (YouTube, Dailymotion, Facebook, TikTok, Instagram...)",
-            height=46, corner_radius=12, font=(FONT, 13),
-            fg_color=ENTRY_BG, border_color=BORDER, border_width=1)
+            row,
+            placeholder_text="https://...  (YouTube, Dailymotion, Facebook, TikTok, Instagram...)",
+            height=46,
+            corner_radius=12,
+            font=(FONT, 13),
+            fg_color=ENTRY_BG,
+            border_color=BORDER,
+            border_width=1,
+        )
         self.url_entry.pack(side="left", fill="x", expand=True)
         self.url_entry.bind("<Return>", lambda e: self._fetch_info())
 
-        ctk.CTkButton(row, text="📋", width=46, height=46, corner_radius=12,
-                      fg_color=ENTRY_BG, hover_color=BORDER,
-                      font=(FONT, 16), command=self._paste).pack(side="left", padx=(8, 0))
+        ctk.CTkButton(
+            row,
+            text="📋",
+            width=46,
+            height=46,
+            corner_radius=12,
+            fg_color=ENTRY_BG,
+            hover_color=BORDER,
+            font=(FONT, 16),
+            command=self._paste,
+        ).pack(side="left", padx=(8, 0))
 
-        self.fetch_btn = ctk.CTkButton(row, text="Fetch ⚡", width=100, height=46, corner_radius=12,
-                                       fg_color=ENTRY_BG, hover_color=BORDER, text_color=TEXT,
-                                       font=(FONT, 13, "bold"), command=self._fetch_info)
+        self.fetch_btn = ctk.CTkButton(
+            row,
+            text="Fetch ⚡",
+            width=100,
+            height=46,
+            corner_radius=12,
+            fg_color=ENTRY_BG,
+            hover_color=BORDER,
+            text_color=TEXT,
+            font=(FONT, 13, "bold"),
+            command=self._fetch_info,
+        )
         self.fetch_btn.pack(side="left", padx=(8, 0))
 
     def _build_preview_card(self):
@@ -272,7 +375,9 @@ class VeltraApp(ctk.CTk):
         self.preview_placeholder = ctk.CTkLabel(
             self.preview,
             text="🔗  Paste a link and hit 'Fetch ⚡' — the video preview will appear here",
-            font=(FONT, 13), text_color=MUTED)
+            font=(FONT, 13),
+            text_color=MUTED,
+        )
         self.preview_placeholder.pack(expand=True)
 
     def _build_options_card(self):
@@ -281,23 +386,68 @@ class VeltraApp(ctk.CTk):
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.pack(fill="x", padx=16, pady=14)
 
-        ctk.CTkLabel(inner, text="QUALITY", font=(FONT, 11, "bold"),
-                     text_color=MUTED).pack(anchor="w")
+        ctk.CTkLabel(
+            inner, text="QUALITY", font=(FONT, 11, "bold"), text_color=MUTED
+        ).pack(anchor="w")
 
         self.quality_seg = ctk.CTkSegmentedButton(
-            inner, values=["Best", "2160p", "1080p", "720p", "480p", "MP3"],
-            height=40, corner_radius=10, font=(FONT, 12, "bold"), text_color=TEXT,
-            fg_color=ENTRY_BG, selected_color=ACCENT, selected_hover_color=ACCENT_HV,
-            unselected_color=ENTRY_BG, unselected_hover_color=BORDER,
-            command=self._quality_changed)
+            inner,
+            values=["Best", "2160p", "1080p", "720p", "480p", "MP3"],
+            height=40,
+            corner_radius=10,
+            font=(FONT, 12, "bold"),
+            text_color=TEXT,
+            fg_color=ENTRY_BG,
+            selected_color=ACCENT,
+            selected_hover_color=ACCENT_HV,
+            unselected_color=ENTRY_BG,
+            unselected_hover_color=BORDER,
+            command=self._quality_changed,
+        )
         self.quality_seg.set("Best")
         self.quality_seg.pack(fill="x", pady=(8, 6))
 
         self.quality_hint = ctk.CTkLabel(
             inner,
             text="Best = maximum quality (H.264/AAC — plays on every player)",
-            font=(FONT, 11), text_color=MUTED, anchor="w")
+            font=(FONT, 11),
+            text_color=MUTED,
+            anchor="w",
+        )
         self.quality_hint.pack(anchor="w")
+
+        # ---- COOKIES (fixes YouTube's "Sign in to confirm you're not a bot") ----
+        ctk.CTkLabel(
+            inner,
+            text="COOKIES  —  YouTube bot-check fix",
+            font=(FONT, 11, "bold"),
+            text_color=MUTED,
+        ).pack(anchor="w", pady=(14, 0))
+
+        self.cookie_seg = ctk.CTkSegmentedButton(
+            inner,
+            values=COOKIE_SEG_VALUES,
+            height=36,
+            corner_radius=10,
+            font=(FONT, 12, "bold"),
+            text_color=TEXT,
+            fg_color=ENTRY_BG,
+            selected_color=ACCENT,
+            selected_hover_color=ACCENT_HV,
+            unselected_color=ENTRY_BG,
+            unselected_hover_color=BORDER,
+        )
+        self.cookie_seg.set("Auto")
+        self.cookie_seg.pack(fill="x", pady=(8, 6))
+
+        self.cookie_hint = ctk.CTkLabel(
+            inner,
+            text="Auto = your browser's YouTube cookies are used automatically (Firefox / Brave work best)",
+            font=(FONT, 11),
+            text_color=MUTED,
+            anchor="w",
+        )
+        self.cookie_hint.pack(anchor="w")
 
     def _build_action_buttons(self):
         """Download and Cancel share the SAME slot — they swap places.
@@ -307,18 +457,30 @@ class VeltraApp(ctk.CTk):
 
         # Download button (green)
         self.download_btn = ctk.CTkButton(
-            self.action_holder, text="⬇    D O W N L O A D    N O W",
-            height=54, corner_radius=27, font=(FONT, 16, "bold"),
-            fg_color=ACCENT, hover_color=ACCENT_HV, text_color="#062B12",
-            command=self._start_download)
+            self.action_holder,
+            text="⬇    D O W N L O A D    N O W",
+            height=54,
+            corner_radius=27,
+            font=(FONT, 16, "bold"),
+            fg_color=ACCENT,
+            hover_color=ACCENT_HV,
+            text_color="#062B12",
+            command=self._start_download,
+        )
         self.download_btn.pack(fill="x")
 
         # Cancel button (red) — same size, same slot, currently hidden
         self.cancel_btn = ctk.CTkButton(
-            self.action_holder, text="✕    C A N C E L    D O W N L O A D",
-            height=54, corner_radius=27, font=(FONT, 16, "bold"),
-            fg_color="#2A1518", hover_color="#3B1D22", text_color=DANGER,
-            command=self._cancel)
+            self.action_holder,
+            text="✕    C A N C E L    D O W N L O A D",
+            height=54,
+            corner_radius=27,
+            font=(FONT, 16, "bold"),
+            fg_color="#2A1518",
+            hover_color="#3B1D22",
+            text_color=DANGER,
+            command=self._cancel,
+        )
 
     def _build_progress_card(self):
         card = ctk.CTkFrame(self, fg_color=CARD, corner_radius=18)
@@ -328,20 +490,29 @@ class VeltraApp(ctk.CTk):
 
         top = ctk.CTkFrame(inner, fg_color="transparent")
         top.pack(fill="x")
-        self.lbl_percent = ctk.CTkLabel(top, text="0 %", font=(FONT, 26, "bold"), text_color=ACCENT)
+        self.lbl_percent = ctk.CTkLabel(
+            top, text="0 %", font=(FONT, 26, "bold"), text_color=ACCENT
+        )
         self.lbl_percent.pack(side="left")
 
         stats = ctk.CTkFrame(top, fg_color="transparent")
         stats.pack(side="right")
-        self.lbl_size = ctk.CTkLabel(stats, text="— / —", font=(FONT, 11), text_color=MUTED)
+        self.lbl_size = ctk.CTkLabel(
+            stats, text="— / —", font=(FONT, 11), text_color=MUTED
+        )
         self.lbl_size.pack(side="left", padx=(0, 16))
-        self.lbl_speed = ctk.CTkLabel(stats, text="Speed: —", font=(FONT, 11), text_color=MUTED)
+        self.lbl_speed = ctk.CTkLabel(
+            stats, text="Speed: —", font=(FONT, 11), text_color=MUTED
+        )
         self.lbl_speed.pack(side="left", padx=(0, 16))
-        self.lbl_eta = ctk.CTkLabel(stats, text="ETA: —", font=(FONT, 11), text_color=MUTED)
+        self.lbl_eta = ctk.CTkLabel(
+            stats, text="ETA: —", font=(FONT, 11), text_color=MUTED
+        )
         self.lbl_eta.pack(side="left")
 
-        self.progress = ctk.CTkProgressBar(inner, progress_color=ACCENT, fg_color=ENTRY_BG,
-                                           height=12, corner_radius=6)
+        self.progress = ctk.CTkProgressBar(
+            inner, progress_color=ACCENT, fg_color=ENTRY_BG, height=12, corner_radius=6
+        )
         self.progress.set(0)
         self.progress.pack(fill="x", pady=(10, 10))
 
@@ -349,16 +520,86 @@ class VeltraApp(ctk.CTk):
         bottom.pack(fill="x")
         bottom.grid_columnconfigure(0, weight=1)
 
-        self.status_label = ctk.CTkLabel(bottom, text="Ready — paste a link to start",
-                                         font=(FONT, 12), text_color=MUTED, anchor="w")
+        self.status_label = ctk.CTkLabel(
+            bottom,
+            text="Ready — paste a link to start",
+            font=(FONT, 12),
+            text_color=MUTED,
+            anchor="w",
+        )
         self.status_label.grid(row=0, column=0, sticky="w")
 
-        self.open_btn = ctk.CTkButton(bottom, text="📂  Open Folder", width=132, height=32,
-                                      corner_radius=9, fg_color=ENTRY_BG, hover_color=BORDER,
-                                      text_color=TEXT, font=(FONT, 12, "bold"),
-                                      command=lambda: self._open_path(self._last_saved_folder))
+        self.open_btn = ctk.CTkButton(
+            bottom,
+            text="📂  Open Folder",
+            width=132,
+            height=32,
+            corner_radius=9,
+            fg_color=ENTRY_BG,
+            hover_color=BORDER,
+            text_color=TEXT,
+            font=(FONT, 12, "bold"),
+            command=lambda: self._open_path(self._last_saved_folder),
+        )
         self.open_btn.grid(row=0, column=1, sticky="e", padx=(10, 0))
         self.open_btn.grid_remove()
+
+    # ================= COOKIE CHAIN (bot-check fix) =================
+    def _cookie_chain(self, url):
+        """Return [(label, extra_ytdlp_opts), ...] tried in order.
+        Auto = cookies.txt (if present) + browser cookies.
+        The source that worked last time is always tried first."""
+        mode = self.cookie_seg.get() if hasattr(self, "cookie_seg") else "Auto"
+        txt = os.path.join(base_dir(), "cookies.txt")
+        has_txt = os.path.isfile(txt)
+
+        if mode == "Off":
+            return [("no cookies", {})]
+
+        if mode == "Auto":
+            chain = []
+            ok = getattr(self, "_cookie_ok_source", None)
+            if ok:
+                chain.append(ok)
+            if has_txt and (not ok or ok[0] != "cookies.txt"):
+                chain.append(("cookies.txt", {"cookiefile": txt}))
+            for b in AUTO_BROWSERS:
+                if not ok or ok[0] != b:
+                    chain.append((b, {"cookiesfrombrowser": (b,)}))
+            if "youtube.com" in url or "youtu.be" in url:
+                # YouTube hits the bot-check without cookies — cookies first!
+                return chain or [("no cookies", {})]
+            # Other sites usually work anonymously — cookies as fallback
+            return [("no cookies", {})] + chain
+
+        b = mode.lower()
+        return [(b, {"cookiesfrombrowser": (b,)})]
+
+    def _show_bot_help(self):
+        """Popup with the step-by-step fix for YouTube's bot check."""
+        if self._bot_help_shown:
+            return
+        self._bot_help_shown = True
+
+        def pop():
+            messagebox.showwarning(
+                f"{APP_NAME} — YouTube bot check",
+                "YouTube is blocking anonymous downloads:\n"
+                '"Sign in to confirm you\'re not a bot"\n\n'
+                "FIX (takes 1 minute):\n"
+                "1. Click  ⟳ Update Engine  (top-right), then restart Veltra.\n"
+                "2. Install Firefox (mozilla.org) and open youtube.com in it ONCE\n"
+                "    — signing in to YouTube there makes it even more reliable.\n"
+                "3. Keep Cookies = Auto and press Fetch ⚡ / DOWNLOAD again.\n\n"
+                "ALTERNATIVE: put a cookies.txt file (Netscape format) next to\n"
+                "Veltra.py / Veltra.exe — Auto finds it automatically.\n\n"
+                "NOTE: Chrome & Edge encrypt their cookies on Windows, so they\n"
+                "often cannot be read. Firefox, Brave or a cookies.txt file work.\n\n"
+                "This is not a Veltra bug — YouTube blocks every downloader\n"
+                "that has no cookies.",
+            )
+
+        self.after(0, pop)
 
     # ================= ACTIONS =================
     def _paste(self):
@@ -377,29 +618,86 @@ class VeltraApp(ctk.CTk):
             "MP3": "MP3 = audio only (music, podcasts, lectures)",
         }
         self.quality_hint.configure(
-            text=hints.get(value, f"Quality will be capped at {value} (H.264 preferred)"))
+            text=hints.get(
+                value, f"Quality will be capped at {value} (H.264 preferred)"
+            )
+        )
 
     def _fetch_info(self):
         url = self.url_entry.get().strip()
         if not url or self.busy:
             return
+        self._bot_help_shown = False
         self.fetch_btn.configure(state="disabled", text="...")
         self._status("🔍 Fetching video info...", MUTED)
 
         def work():
             try:
-                opts = {"quiet": True, "no_warnings": True,
-                        "skip_download": True, "noplaylist": True}
+                base_opts = {
+                    "quiet": True,
+                    "no_warnings": True,
+                    "skip_download": True,
+                    "noplaylist": True,
+                }
                 if FFMPEG_PATH:
-                    opts["ffmpeg_location"] = FFMPEG_PATH
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info = ydl.extract_info(url, download=False)
+                    base_opts["ffmpeg_location"] = FFMPEG_PATH
+
+                info, last_err, saw_bot, used = None, None, False, None
+                for label, extra in self._cookie_chain(url):
+                    try:
+                        if label != "no cookies":
+                            self._status(f"🍪 Trying cookies: {label} ...", MUTED)
+                        with yt_dlp.YoutubeDL({**base_opts, **extra}) as ydl:
+                            info = ydl.extract_info(url, download=False)
+                        used = label
+                        if label != "no cookies":
+                            self._cookie_ok_source = (label, dict(extra))
+                        break
+                    except Exception as e:
+                        last_err = e
+                        if is_bot_check(e):
+                            saw_bot = True
+                            continue  # next cookie source
+                        if label != "no cookies" and is_cookie_error(e):
+                            continue  # unreadable cookies — next source
+                        raise
+
+                if info is None:
+                    if not saw_bot and last_err is not None:
+                        # every cookie source was unreadable → one plain try
+                        with yt_dlp.YoutubeDL(base_opts) as ydl:
+                            info = ydl.extract_info(url, download=False)
+                    else:
+                        raise (last_err if last_err else Exception("Fetch failed"))
+
+                cookie_txt = (
+                    f"  (🍪 {used})" if used not in (None, "no cookies") else ""
+                )
                 self.after(0, lambda: self._show_preview(info))
-                self._status("✅ Preview loaded — pick a quality and hit DOWNLOAD", ACCENT)
+                self._status(
+                    f"✅ Preview loaded — pick a quality and hit DOWNLOAD{cookie_txt}",
+                    ACCENT,
+                )
             except Exception as e:
-                self._status("❌ " + str(e).splitlines()[0][:80], DANGER)
+                if is_bot_check(e):
+                    self._status(
+                        "❌ YouTube bot check — cookies needed (help popup opened)",
+                        DANGER,
+                    )
+                    self._show_bot_help()
+                else:
+                    msg = str(e).splitlines()[0] if str(e) else "Unknown error"
+                    self._status("❌ " + msg[:80], DANGER)
+                    self.after(
+                        0,
+                        lambda m=msg: messagebox.showerror(
+                            f"{APP_NAME} — Fetch Failed", m
+                        ),
+                    )
             finally:
-                self.after(0, lambda: self.fetch_btn.configure(state="normal", text="Fetch ⚡"))
+                self.after(
+                    0, lambda: self.fetch_btn.configure(state="normal", text="Fetch ⚡")
+                )
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -420,8 +718,15 @@ class VeltraApp(ctk.CTk):
         title = info.get("title") or "Unknown Title"
         if len(title) > 72:
             title = title[:69] + "..."
-        ctk.CTkLabel(box, text=title, font=(FONT, 15, "bold"), text_color=TEXT,
-                     wraplength=500, justify="left", anchor="w").pack(anchor="w")
+        ctk.CTkLabel(
+            box,
+            text=title,
+            font=(FONT, 15, "bold"),
+            text_color=TEXT,
+            wraplength=500,
+            justify="left",
+            anchor="w",
+        ).pack(anchor="w")
 
         dur = info.get("duration_string")
         if not dur and info.get("duration"):
@@ -434,11 +739,18 @@ class VeltraApp(ctk.CTk):
             parts.append("⏱ " + dur)
         if info.get("view_count"):
             parts.append(f"👁 {info['view_count']:,}")
-        ctk.CTkLabel(box, text="   •   ".join(parts) if parts else " ",
-                     font=(FONT, 12), text_color=MUTED, anchor="w").pack(anchor="w", pady=(8, 0))
+        ctk.CTkLabel(
+            box,
+            text="   •   ".join(parts) if parts else " ",
+            font=(FONT, 12),
+            text_color=MUTED,
+            anchor="w",
+        ).pack(anchor="w", pady=(8, 0))
 
     def _load_thumb(self, url, parent):
-        holder = ctk.CTkFrame(parent, width=190, height=110, corner_radius=14, fg_color=ENTRY_BG)
+        holder = ctk.CTkFrame(
+            parent, width=190, height=110, corner_radius=14, fg_color=ENTRY_BG
+        )
         holder.pack(side="left")
         holder.pack_propagate(False)
         ph = ctk.CTkLabel(holder, text="🎞", font=(FONT, 30), text_color=MUTED)
@@ -454,22 +766,27 @@ class VeltraApp(ctk.CTk):
                 w, h = img.size
                 t = 16 / 9
                 if w / h > t:
-                    nw = int(h * t); x = (w - nw) // 2
+                    nw = int(h * t)
+                    x = (w - nw) // 2
                     img = img.crop((x, 0, x + nw, h))
                 else:
-                    nh = int(w / t); y = (h - nh) // 2
+                    nh = int(w / t)
+                    y = (h - nh) // 2
                     img = img.crop((0, y, w, y + nh))
                 img = rounded_img(img, (190, 110), 14)
 
                 def apply():
                     try:
-                        self._thumb_img = ctk.CTkImage(light_image=img, dark_image=img,
-                                                       size=(190, 110))
+                        self._thumb_img = ctk.CTkImage(
+                            light_image=img, dark_image=img, size=(190, 110)
+                        )
                         ph.destroy()
                         ctk.CTkLabel(holder, image=self._thumb_img, text="").place(
-                            relx=0.5, rely=0.5, anchor="center")
+                            relx=0.5, rely=0.5, anchor="center"
+                        )
                     except Exception:
                         pass
+
                 self.after(0, apply)
             except Exception:
                 pass  # keep the placeholder if the thumbnail fails
@@ -486,8 +803,10 @@ class VeltraApp(ctk.CTk):
             return
 
         # Ask where to save (every download)
-        folder = filedialog.askdirectory(title=f"📁 {APP_NAME} — Choose where to save the video",
-                                         initialdir=self.last_folder)
+        folder = filedialog.askdirectory(
+            title=f"📁 {APP_NAME} — Choose where to save the video",
+            initialdir=self.last_folder,
+        )
         if not folder:
             return
         self.last_folder = folder
@@ -495,6 +814,7 @@ class VeltraApp(ctk.CTk):
 
         self.busy = True
         self.cancel_event.clear()
+        self._bot_help_shown = False
 
         # 🔥 SWAP: green DOWNLOAD disappears, red CANCEL takes its exact place
         self.download_btn.pack_forget()
@@ -506,9 +826,11 @@ class VeltraApp(ctk.CTk):
         self.lbl_percent.configure(text="0 %", text_color=ACCENT)
         self._status("🚀 Connecting...", MUTED)
 
-        threading.Thread(target=self._run_download,
-                         args=(url, folder, self.quality_seg.get()),
-                         daemon=True).start()
+        threading.Thread(
+            target=self._run_download,
+            args=(url, folder, self.quality_seg.get()),
+            daemon=True,
+        ).start()
 
     def _run_download(self, url, folder, quality):
         try:
@@ -523,14 +845,18 @@ class VeltraApp(ctk.CTk):
             if quality == "MP3":
                 fmt = "bestaudio/best"
             elif quality == "Best":
-                fmt = ("bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
-                       "bestvideo+bestaudio/best")
+                fmt = (
+                    "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/"
+                    "bestvideo+bestaudio/best"
+                )
             else:
                 h = quality.replace("p", "")
-                fmt = (f"bestvideo[vcodec^=avc1][height<={h}]+bestaudio[acodec^=mp4a]/"
-                       f"bestvideo[height<={h}]+bestaudio/best[height<={h}]")
+                fmt = (
+                    f"bestvideo[vcodec^=avc1][height<={h}]+bestaudio[acodec^=mp4a]/"
+                    f"bestvideo[height<={h}]+bestaudio/best[height<={h}]"
+                )
 
-            opts = {
+            base_opts = {
                 "format": fmt,
                 "outtmpl": os.path.join(folder, "%(title)s.%(ext)s"),
                 "merge_output_format": "mp4",
@@ -538,23 +864,59 @@ class VeltraApp(ctk.CTk):
                 "noplaylist": True,
                 "quiet": True,
                 "no_warnings": True,
-                "concurrent_fragment_downloads": 8,   # 4-5x speed (quality is unaffected)
+                "concurrent_fragment_downloads": 8,  # 4-5x speed (quality is unaffected)
                 "retries": 10,
-                "continuedl": True,                    # resume partial downloads
+                "continuedl": True,  # resume partial downloads
                 "windowsfilenames": True,
             }
             if FFMPEG_PATH:
-                opts["ffmpeg_location"] = FFMPEG_PATH
+                base_opts["ffmpeg_location"] = FFMPEG_PATH
             if quality == "MP3":
-                opts["postprocessors"] = [{
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }]
+                base_opts["postprocessors"] = [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": "192",
+                    }
+                ]
 
+            # 🍪 COOKIE CHAIN — when YouTube says "Sign in to confirm you're
+            # not a bot", the next cookie source is tried automatically.
             self._status("⬇ Downloading...", MUTED)
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.extract_info(url, download=True)
+            info, last_err, saw_bot, done_ok = None, None, False, False
+            for label, extra in self._cookie_chain(url):
+                opts = dict(base_opts)
+                opts.update(extra)
+                try:
+                    if label != "no cookies":
+                        self._status(
+                            f"🍪 Using cookies: {label} — connecting...", MUTED
+                        )
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        info = ydl.extract_info(url, download=True)
+                    done_ok = True
+                    if label != "no cookies":
+                        self._cookie_ok_source = (label, dict(extra))
+                    break
+                except DownloadCancelled:
+                    raise  # user pressed CANCEL — stop now
+                except Exception as e:
+                    last_err = e
+                    if is_bot_check(e):
+                        saw_bot = True
+                        continue  # next cookie source
+                    if label != "no cookies" and is_cookie_error(e):
+                        continue  # unreadable cookies — next source
+                    raise
+
+            if not done_ok:
+                if not saw_bot and last_err is not None:
+                    # every cookie source was unreadable → one plain try
+                    self._status("⬇ Downloading...", MUTED)
+                    with yt_dlp.YoutubeDL(base_opts) as ydl:
+                        info = ydl.extract_info(url, download=True)
+                elif last_err is not None:
+                    raise last_err
 
             def done():
                 self.progress.set(1.0)
@@ -563,6 +925,7 @@ class VeltraApp(ctk.CTk):
                 self.lbl_eta.configure(text="ETA: —")
                 self._status(f"✅ Complete! Saved in: {folder}", ACCENT)
                 self.open_btn.grid()
+
             self.after(0, done)
 
         except DownloadCancelled:
@@ -570,12 +933,30 @@ class VeltraApp(ctk.CTk):
             self.after(0, lambda: self.progress.set(0))
             self.after(0, lambda: self.lbl_percent.configure(text="0 %"))
         except Exception as e:
-            traceback.print_exc()   # full error in the terminal
-            msg = str(e).splitlines()[0] if str(e) else "Unknown error"
-            self._status("❌ " + msg[:90], DANGER)
-            # 🔥 ERROR POPUP — failures are never silent!
-            self.after(0, lambda m=msg: messagebox.showerror(
-                f"{APP_NAME} — Download Failed", m))
+            traceback.print_exc()  # full error in the terminal
+            if is_bot_check(e):
+                self._status(
+                    "❌ YouTube bot check — cookies needed (help popup opened)", DANGER
+                )
+                self._show_bot_help()
+            else:
+                msg = str(e).splitlines()[0] if str(e) else "Unknown error"
+                tip = (
+                    (
+                        "\n\n(Tip: that browser's cookies could not be read.\n"
+                        "Set Cookies = Auto, or use Firefox / a cookies.txt file.)"
+                    )
+                    if is_cookie_error(e)
+                    else ""
+                )
+                self._status("❌ " + msg[:90], DANGER)
+                # 🔥 ERROR POPUP — failures are never silent!
+                self.after(
+                    0,
+                    lambda m=msg + tip: messagebox.showerror(
+                        f"{APP_NAME} — Download Failed", m
+                    ),
+                )
         finally:
             self.after(0, self._reset_ui)
 
@@ -584,10 +965,12 @@ class VeltraApp(ctk.CTk):
             raise DownloadCancelled()
 
         if d.get("status") == "finished":
+
             def merging():
                 self.progress.set(1.0)
                 self.lbl_percent.configure(text="100 %")
                 self._status("🔧 Merging (ffmpeg)... please wait", MUTED)
+
             self.after(0, merging)
             return
 
@@ -595,7 +978,7 @@ class VeltraApp(ctk.CTk):
             return
 
         now = time.time()
-        if now - self._last_tick < 0.12:   # UI flood control
+        if now - self._last_tick < 0.12:  # UI flood control
             return
         self._last_tick = now
 
@@ -618,8 +1001,10 @@ class VeltraApp(ctk.CTk):
             self.lbl_percent.configure(text=f"{int(pct * 100)} %")
             self.lbl_size.configure(text=size_txt)
             self.lbl_speed.configure(
-                text=f"Speed: {human_size(speed)}/s" if speed else "Speed: —")
+                text=f"Speed: {human_size(speed)}/s" if speed else "Speed: —"
+            )
             self.lbl_eta.configure(text=f"ETA: {human_eta(eta)}")
+
         self.after(0, up)
 
     # ================= BUILD EXE (built-in builder!) =================
@@ -632,7 +1017,8 @@ class VeltraApp(ctk.CTk):
             ok = messagebox.askyesno(
                 "Icon Missing",
                 "'Veltra.png' was not found in this folder.\n\n"
-                "Build the EXE without an icon? (default icon will be used)")
+                "Build the EXE without an icon? (default icon will be used)",
+            )
             if not ok:
                 return
 
@@ -651,27 +1037,48 @@ class VeltraApp(ctk.CTk):
             script = os.path.abspath(__file__)
 
             self._status("⚙ Step 1/2: Preparing PyInstaller...", MUTED)
-            r = subprocess.run([sys.executable, "-m", "pip", "install", "-U", "pyinstaller"],
-                               capture_output=True, text=True, timeout=600, creationflags=cf)
+            r = subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-U", "pyinstaller"],
+                capture_output=True,
+                text=True,
+                timeout=600,
+                creationflags=cf,
+            )
             if r.returncode != 0:
-                self._status("❌ PyInstaller install failed: " + (r.stderr or "")[:70], DANGER)
+                self._status(
+                    "❌ PyInstaller install failed: " + (r.stderr or "")[:70], DANGER
+                )
                 return
 
             self._status("🔨 Step 2/2: Building EXE (3-6 minutes)...", MUTED)
-            cmd = [sys.executable, "-m", "PyInstaller",
-                   "--noconfirm", "--clean", "--onefile", "--noconsole",
-                   "--name", APP_NAME]
+            cmd = [
+                sys.executable,
+                "-m",
+                "PyInstaller",
+                "--noconfirm",
+                "--clean",
+                "--onefile",
+                "--noconsole",
+                "--name",
+                APP_NAME,
+            ]
             if ico:
                 cmd += ["--icon", ico, "--add-data", f"{ico}{sep}."]
             if png:
                 cmd += ["--add-data", f"{png}{sep}."]
-            cmd += ["--collect-all", "customtkinter",
-                    "--collect-all", "yt_dlp",
-                    "--collect-all", "imageio_ffmpeg",
-                    script]
+            cmd += [
+                "--collect-all",
+                "customtkinter",
+                "--collect-all",
+                "yt_dlp",
+                "--collect-all",
+                "imageio_ffmpeg",
+                script,
+            ]
 
-            r = subprocess.run(cmd, capture_output=True, text=True,
-                               timeout=1800, creationflags=cf)
+            r = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=1800, creationflags=cf
+            )
             exe = os.path.join(base_dir(), "dist", f"{APP_NAME}.exe")
 
             if r.returncode == 0 and os.path.exists(exe):
@@ -679,7 +1086,9 @@ class VeltraApp(ctk.CTk):
                 self._open_path(os.path.join(base_dir(), "dist"))
             else:
                 err = (r.stderr or r.stdout or "unknown error").strip().splitlines()
-                self._status("❌ Build failed: " + (err[-1] if err else "?")[:80], DANGER)
+                self._status(
+                    "❌ Build failed: " + (err[-1] if err else "?")[:80], DANGER
+                )
         except Exception as e:
             self._status("❌ " + str(e)[:80], DANGER)
         finally:
@@ -694,19 +1103,29 @@ class VeltraApp(ctk.CTk):
                 f"{APP_NAME} — Update",
                 "This is a portable build.\n\n"
                 "When YouTube changes its system, get an updated EXE from the developer, "
-                "or rebuild using Veltra.py + the Create EXE button.")
+                "or rebuild using Veltra.py + the Create EXE button.",
+            )
             return
         self._status("⟳ Updating yt-dlp engine... (pip install -U yt-dlp)", MUTED)
 
         def work():
             try:
                 cf = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-                r = subprocess.run([sys.executable, "-m", "pip", "install", "-U", "yt-dlp"],
-                                   capture_output=True, text=True, timeout=300, creationflags=cf)
+                r = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "-U", "yt-dlp"],
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                    creationflags=cf,
+                )
                 if r.returncode == 0:
-                    self._status("✅ Engine updated! Restart the app to load it", ACCENT)
+                    self._status(
+                        "✅ Engine updated! Restart the app to load it", ACCENT
+                    )
                 else:
-                    self._status("⚠️ Update failed: " + (r.stderr or "unknown")[:70], WARNING)
+                    self._status(
+                        "⚠️ Update failed: " + (r.stderr or "unknown")[:70], WARNING
+                    )
             except Exception as e:
                 self._status("⚠️ " + str(e)[:70], WARNING)
 
@@ -739,9 +1158,13 @@ class VeltraApp(ctk.CTk):
         # 🔥 SWAP BACK: red CANCEL disappears, green DOWNLOAD returns
         self.cancel_btn.pack_forget()
         self.download_btn.pack(fill="x")
-        self.download_btn.configure(state="normal", text="⬇    D O W N L O A D    N O W")
+        self.download_btn.configure(
+            state="normal", text="⬇    D O W N L O A D    N O W"
+        )
         self.fetch_btn.configure(state="normal", text="Fetch ⚡")
-        self.cancel_btn.configure(state="normal", text="✕    C A N C E L    D O W N L O A D")
+        self.cancel_btn.configure(
+            state="normal", text="✕    C A N C E L    D O W N L O A D"
+        )
         self.open_btn.grid_remove()
 
     def _status(self, text, color=MUTED):
